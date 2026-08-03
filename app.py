@@ -169,23 +169,6 @@ if st.button("Run Simulation", type="primary"):
     m2.metric("No-claim probability", f"{(outcomes == 0).mean():.1%}")
     m3.metric("Median outcome", f"${np.median(outcomes):,.0f}")
 
-    median_outcome = np.median(outcomes)
-    if median_outcome == 0:
-        st.caption(
-            "💡 A $0 median means this profile's single most likely outcome "
-            "in any given year is **no claim at all** -- this isn't a "
-            "limitation of the model, it's the actual nature of insurance "
-            "risk. The real value shows up in the tail below: a smaller "
-            "chance of a real, sometimes large, expense."
-        )
-    else:
-        st.caption(
-            "💡 This profile's median outcome is **above $0** -- meaning a "
-            "claim is more likely than not in a given year for this "
-            "specific pet, not just a tail-risk possibility. Worth pricing "
-            "and reserving for accordingly."
-        )
-
     with st.expander("How to read these numbers"):
         st.markdown(
             """
@@ -215,6 +198,23 @@ if st.button("Run Simulation", type="primary"):
 
     if (outcomes > 0).any():
         st.caption(f"Median cost *given a claim actually happens*: ${np.median(outcomes[outcomes > 0]):,.2f}")
+
+    median_outcome = np.median(outcomes)
+    if median_outcome == 0:
+        st.caption(
+            "💡 A $0 median means this profile's single most likely outcome "
+            "in any given year is **no claim at all** -- this isn't a "
+            "limitation of the model, it's the actual nature of insurance "
+            "risk. The real value shows up in the tail above: a smaller "
+            "chance of a real, sometimes large, expense."
+        )
+    else:
+        st.caption(
+            "💡 This profile's median outcome is **above $0** -- meaning a "
+            "claim is more likely than not in a given year for this "
+            "specific pet, not just a tail-risk possibility. Worth pricing "
+            "and reserving for accordingly."
+        )
 
     st.divider()
     st.subheader("Cost Range by Age")
