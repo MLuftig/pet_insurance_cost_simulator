@@ -2,6 +2,7 @@ import streamlit as st
 import joblib
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Pet Insurance Cost Simulator", page_icon="🐾", layout="centered")
 
@@ -75,6 +76,21 @@ def simulate_individual_pet(claim_prob, n_sims, seed=None):
     return outcomes
 
 
+def build_age_range_chart(species, breed, enroll_path, age_sims=3000):
+    """Sweeps age 0-15 for the given species/breed, returning the 5th-95th
+    percentile cost range plus median at each age -- shows how the plausible
+    cost band shifts as a pet ages, not just a single age's outcome."""
+    ages = np.arange(0, 15.5, 1.0)
+    p5s, medians, p95s = [], [], []
+    for age in ages:
+        X, _, _ = build_feature_row(species, breed, age, enroll_path)
+        prob = clf.predict_proba(X)[0][1]
+        outcomes = simulate_individual_pet(prob, age_sims, seed=42)
+        p5, med, p95 = np.percentile(outcomes, [5, 50, 95])
+        p5s.append(p5); medians.append(med); p95s.append(p95)
+    return ages, np.array(p5s), np.array(medians), np.array(p95s)
+
+
 # ============================================================
 # UI
 # ============================================================
@@ -134,6 +150,27 @@ if st.button("Run Simulation", type="primary"):
 
     if (outcomes > 0).any():
         st.caption(f"Median cost *given a claim actually happens*: ${np.median(outcomes[outcomes > 0]):,.2f}")
+
+    st.divider()
+    st.subheader("Cost Range by Age")
+    st.caption(
+        f"How the plausible cost range shifts across a {breed}'s lifetime "
+        "(5th-95th percentile band, shaded). The current age is marked with "
+        "a vertical line."
+    )
+    with st.spinner("Building age range chart..."):
+        ages, p5s, medians, p95s = build_age_range_chart(species, breed, enroll_path)
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.fill_between(ages, p5s, p95s, alpha=0.25, color="#FF6B6B", label="5th-95th percentile range")
+    ax.plot(ages, medians, color="#FF6B6B", linewidth=2, label="Median outcome")
+    ax.axvline(age_years, color="gray", linestyle="--", linewidth=1, label=f"Selected age ({age_years})")
+    ax.set_xlabel("Age (years)")
+    ax.set_ylabel("Estimated First-Year Claim Cost ($)")
+    ax.legend(loc="upper left", fontsize=9)
+    ax.grid(alpha=0.2)
+    fig.tight_layout()
+    st.pyplot(fig)
 
     st.divider()
     if is_researched:
