@@ -54,9 +54,22 @@ BREED_PREDISPOSITIONS = {
 }
 
 
+# Real observed enrollment-channel frequencies in the training data (Web:
+# 25,486 / Phone: 23,525 / EB: 989 of 50,000 pets) -- used to marginalize
+# over the real channel distribution when the user doesn't know/specify
+# their channel, rather than silently defaulting to one specific category.
+# NOTE: one-hot encoding with drop_first=True has no true "blank" state --
+# EnrollPath_Phone=0, EnrollPath_Web=0 already means "EB" to the model, not
+# "unknown." A genuine unknown has to be handled by averaging predictions
+# across the real categories, not by zeroing out the dummy flags.
+_ENROLLPATH_COUNTS = {'Web': 25486, 'Phone': 23525, 'EB': 989}
+_ENROLLPATH_TOTAL = sum(_ENROLLPATH_COUNTS.values())
+ENROLLPATH_WEIGHTS = {k: v / _ENROLLPATH_TOTAL for k, v in _ENROLLPATH_COUNTS.items()}
+
+
 def build_feature_row(species, breed, age_years, enroll_path):
     is_researched = breed in BREED_PREDISPOSITIONS
-    flags = BREED_PREDISPOSITIONS.get(breed, {k: 0 for k in FLAG_COLS})  # unresearched -> treated as 0/no-known-flag, not a guess
+    flags = BREED_PREDISPOSITIONS.get(breed, {k: 0 for k in FLAG_COLS})
     row = {'age_years': age_years}
     row.update(flags)
     row['research_coverage'] = int(is_researched)
@@ -64,6 +77,23 @@ def build_feature_row(species, breed, age_years, enroll_path):
     row['EnrollPath_Phone'] = int(enroll_path == 'Phone')
     row['EnrollPath_Web'] = int(enroll_path == 'Web')
     return pd.DataFrame([row], columns=FEATURE_COLS), is_researched, flags
+
+
+def predict_claim_prob(species, breed, age_years, enroll_path):
+    """Handles 'Unknown' by marginalizing over the real observed channel
+    distribution (weighted average across Web/Phone/EB), rather than
+    guessing a single specific channel."""
+    if enroll_path == 'Unknown':
+        weighted_prob = 0.0
+        flags_out, researched_out = None, None
+        for channel, weight in ENROLLPATH_WEIGHTS.items():
+            X, is_researched, flags = build_feature_row(species, breed, age_years, channel)
+            weighted_prob += weight * clf.predict_proba(X)[0][1]
+            flags_out, researched_out = flags, is_researched  # same regardless of channel
+        return weighted_prob, researched_out, flags_out
+    else:
+        X, is_researched, flags = build_feature_row(species, breed, age_years, enroll_path)
+        return clf.predict_proba(X)[0][1], is_researched, flags
 
 
 def simulate_individual_pet(claim_prob, n_sims, seed=None):
@@ -83,8 +113,7 @@ def build_age_range_chart(species, breed, enroll_path, age_sims=3000):
     ages = np.arange(0, 15.5, 1.0)
     p5s, medians, p95s = [], [], []
     for age in ages:
-        X, _, _ = build_feature_row(species, breed, age, enroll_path)
-        prob = clf.predict_proba(X)[0][1]
+        prob, _, _ = predict_claim_prob(species, breed, age, enroll_path)
         outcomes = simulate_individual_pet(prob, age_sims, seed=42)
         p5, med, p95 = np.percentile(outcomes, [5, 50, 95])
         p5s.append(p5); medians.append(med); p95s.append(p95)
@@ -121,13 +150,13 @@ with col2:
     else:
         breed_options = ["Other / Mixed Breed"]  # cat predisposition is age-driven, not breed-driven -- see README
     breed = st.selectbox("Breed", breed_options)
-    enroll_path = st.selectbox("Enrollment Channel", ["Web", "Phone", "Other"])
+    enroll_path = st.selectbox("Enrollment Channel", ["Unknown", "Web", "Phone", "EB"])
+    st.caption("EB = Employee Benefit (workplace enrollment)")
 
 n_sims = st.slider("Number of simulations", 500, 10000, 5000, step=500)
 
 if st.button("Run Simulation", type="primary"):
-    X, is_researched, flags = build_feature_row(species, breed, age_years, enroll_path)
-    claim_prob = clf.predict_proba(X)[0][1]
+    claim_prob, is_researched, flags = predict_claim_prob(species, breed, age_years, enroll_path)
 
     with st.spinner("Running Monte Carlo simulation..."):
         outcomes = simulate_individual_pet(claim_prob, n_sims)
@@ -139,6 +168,42 @@ if st.button("Run Simulation", type="primary"):
     m1.metric("Probability of a claim (year 1)", f"{claim_prob:.1%}")
     m2.metric("No-claim probability", f"{(outcomes == 0).mean():.1%}")
     m3.metric("Median outcome", f"${np.median(outcomes):,.0f}")
+
+    median_outcome = np.median(outcomes)
+    if median_outcome == 0:
+        st.caption(
+            "💡 A $0 median means this profile's single most likely outcome "
+            "in any given year is **no claim at all** -- this isn't a "
+            "limitation of the model, it's the actual nature of insurance "
+            "risk. The real value shows up in the tail below: a smaller "
+            "chance of a real, sometimes large, expense."
+        )
+    else:
+        st.caption(
+            "💡 This profile's median outcome is **above $0** -- meaning a "
+            "claim is more likely than not in a given year for this "
+            "specific pet, not just a tail-risk possibility. Worth pricing "
+            "and reserving for accordingly."
+        )
+
+    with st.expander("How to read these numbers"):
+        st.markdown(
+            """
+            - **Probability of a claim** — the model's estimate of how likely
+              *any* claim is for this pet in its first year, based on
+              species, age, and breed predisposition.
+            - **Median outcome** — the single most likely result across
+              thousands of simulated years. Often $0 (see the note above,
+              specific to this result) -- that's expected, not an error.
+            - **75th / 95th / 99th percentile** — how bad a "somewhat
+              unlucky," "worst case," and "extreme worst case" year could
+              realistically look, based on real historical claim amounts,
+              not a guess.
+            - **Median cost, given a claim happens** — a separate number
+              from the overall median: if a claim *does* occur, this is the
+              typical size of that specific claim.
+            """
+        )
 
     st.markdown("**Cost range across simulated years:**")
     p50, p75, p95, p99 = np.percentile(outcomes, [50, 75, 95, 99])
